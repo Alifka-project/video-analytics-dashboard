@@ -4,6 +4,7 @@ import numpy as np
 import time
 from datetime import datetime
 import platform
+import threading
 
 # Configure Streamlit page
 st.set_page_config(
@@ -13,31 +14,13 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-def test_camera_access():
-    """Test which camera indices are available"""
-    available_cameras = []
-    for i in range(10):  # Test first 10 indices
-        cap = cv2.VideoCapture(i)
-        if cap.isOpened():
-            ret, frame = cap.read()
-            if ret and frame is not None:
-                available_cameras.append(i)
-            cap.release()
-    return available_cameras
-
 def detect_face_opencv(frame):
     """Detect faces using OpenCV's built-in cascade classifier"""
     try:
-        # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
-        # Load face cascade classifier
         face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-        
-        # Detect faces
         faces = face_cascade.detectMultiScale(gray, 1.1, 4)
         
-        # Draw rectangles around faces
         for (x, y, w, h) in faces:
             cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
             cv2.putText(frame, 'Face Detected', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
@@ -50,18 +33,11 @@ def analyze_posture_simple(frame):
     """Simple posture analysis based on frame composition"""
     try:
         height, width = frame.shape[:2]
-        
-        # Convert to grayscale for analysis
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
-        # Simple center mass calculation
         center_region = gray[height//3:2*height//3, width//3:2*width//3]
         center_intensity = np.mean(center_region)
+        is_centered = center_intensity > 50
         
-        # Check if subject is roughly centered
-        is_centered = center_intensity > 50  # Simple threshold
-        
-        # Draw center guide
         cv2.rectangle(frame, (width//3, height//3), (2*width//3, 2*height//3), (0, 255, 0), 2)
         cv2.putText(frame, 'Center Zone', (width//3, height//3-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         
@@ -70,14 +46,12 @@ def analyze_posture_simple(frame):
         return frame, False
 
 def analyze_gaze_simple(frame, face_detected):
-    """Simple gaze analysis - assumes looking at camera if face is detected and centered"""
+    """Simple gaze analysis"""
     try:
         if not face_detected:
             return frame, False
         
         height, width = frame.shape[:2]
-        
-        # Simple assumption: if face is detected and roughly centered, assume looking at camera
         looking_at_camera = face_detected
         
         if looking_at_camera:
@@ -90,7 +64,7 @@ def analyze_gaze_simple(frame, face_detected):
         return frame, False
 
 def main():
-    st.title("🎥 Real-time Video Analytics Dashboard")
+    st.title("🎥 Real-time Video Analytics Dashboard - Unlimited Mode")
     st.markdown("---")
     
     # System info
@@ -100,30 +74,11 @@ def main():
     # Sidebar configuration
     st.sidebar.header("⚙️ Settings")
     
-    # Camera diagnostics
-    st.sidebar.subheader("📹 Camera Diagnostics")
-    if st.sidebar.button("🔍 Scan for Cameras"):
-        with st.sidebar:
-            with st.spinner("Scanning cameras..."):
-                available_cameras = test_camera_access()
-                if available_cameras:
-                    st.success(f"✅ Found cameras: {available_cameras}")
-                    st.session_state.available_cameras = available_cameras
-                else:
-                    st.error("❌ No cameras found")
-                    st.session_state.available_cameras = []
-    
-    # Camera selection
-    if 'available_cameras' in st.session_state and st.session_state.available_cameras:
-        camera_options = st.session_state.available_cameras
-        camera_index = st.sidebar.selectbox("Camera Index", camera_options, index=0)
-    else:
-        camera_index = st.sidebar.selectbox("Camera Index", [0, 1, 2], index=0)
-    
     # Camera settings
-    st.sidebar.subheader("📷 Camera Settings")
+    camera_index = st.sidebar.selectbox("Camera Index", [0, 1, 2], index=0)
+    
     resolution = st.sidebar.selectbox("Resolution", 
-                                     ["640x480", "1280x720", "1920x1080"], 
+                                     ["640x480", "1280x720"], 
                                      index=0)
     width, height = map(int, resolution.split('x'))
     
@@ -137,20 +92,12 @@ def main():
     st.sidebar.subheader("⚡ Performance")
     fps_limit = st.sidebar.slider("FPS Limit", 5, 30, 15, 1)
     
-    # Session control
-    st.sidebar.subheader("🎮 Session Control")
-    continuous_mode = st.sidebar.checkbox("🔄 Continuous Mode", value=True, 
-                                         help="Run indefinitely without stopping")
-    
     # Control buttons
-    start_camera = st.sidebar.button("🚀 Start Camera", type="primary")
-    stop_camera = st.sidebar.button("⏹️ Stop Camera")
-    reset_session = st.sidebar.button("🔄 Reset Session")
+    start_camera = st.sidebar.button("🚀 Start Unlimited Session", type="primary")
+    stop_camera = st.sidebar.button("⏹️ Stop Session")
     
-    # Runtime info
-    if 'session_start_time' in st.session_state:
-        runtime = time.time() - st.session_state.session_start_time
-        st.sidebar.info(f"⏱️ Runtime: {runtime/60:.1f} minutes")
+    # Important note
+    st.sidebar.info("🔄 **UNLIMITED MODE**: This session will run continuously until you manually stop it!")
     
     # Main layout
     col1, col2 = st.columns([2, 1])
@@ -176,85 +123,78 @@ def main():
         fps_placeholder = st.empty()
         latency_placeholder = st.empty()
         uptime_placeholder = st.empty()
+        frame_count_placeholder = st.empty()
     
     # Initialize session state
-    if 'camera_active' not in st.session_state:
-        st.session_state.camera_active = False
+    if 'camera_running' not in st.session_state:
+        st.session_state.camera_running = False
+        st.session_state.session_start_time = None
+        st.session_state.frame_count = 0
     
     if start_camera:
-        st.session_state.camera_active = True
+        st.session_state.camera_running = True
         st.session_state.session_start_time = time.time()
+        st.session_state.frame_count = 0
     
-    if stop_camera or reset_session:
-        st.session_state.camera_active = False
-        if 'session_start_time' in st.session_state:
-            del st.session_state.session_start_time
+    if stop_camera:
+        st.session_state.camera_running = False
     
-    # Camera processing loop
-    if st.session_state.camera_active:
+    # Camera processing - TRULY UNLIMITED
+    if st.session_state.camera_running:
         cap = None
         try:
-            # Initialize camera with better error handling
-            if 'cap_initialized' not in st.session_state:
-                st.info("🔄 Initializing camera...")
-                cap = cv2.VideoCapture(camera_index)
-                
-                # Enhanced camera setup
-                if not cap.isOpened():
-                    st.error(f"❌ Could not open camera {camera_index}")
-                    st.error("Try clicking 'Scan for Cameras' to find available cameras")
-                    st.session_state.camera_active = False
-                    return
-                
-                # Set camera properties with error checking
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-                cap.set(cv2.CAP_PROP_FPS, fps_limit)
-                
-                # Test frame capture
-                ret, test_frame = cap.read()
-                if not ret or test_frame is None:
-                    st.error("❌ Camera opened but cannot read frames")
-                    st.session_state.camera_active = False
-                    return
-                
-                st.session_state.cap_initialized = True
-                st.success("✅ Camera initialized successfully!")
-            else:
-                cap = cv2.VideoCapture(camera_index)
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-                cap.set(cv2.CAP_PROP_FPS, fps_limit)
+            # Initialize camera
+            cap = cv2.VideoCapture(camera_index)
+            
+            if not cap.isOpened():
+                st.error(f"❌ Could not open camera {camera_index}")
+                st.session_state.camera_running = False
+                return
+            
+            # Set camera properties
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            cap.set(cv2.CAP_PROP_FPS, fps_limit)
+            
+            # Test initial frame
+            ret, test_frame = cap.read()
+            if not ret or test_frame is None:
+                st.error("❌ Cannot read from camera")
+                st.session_state.camera_running = False
+                return
+            
+            st.success("✅ Unlimited session started!")
             
             # Performance tracking
             fps_counter = 0
             fps_start_time = time.time()
+            last_update_time = time.time()
             
-            # Main processing loop - CONTINUOUS MODE
-            frame_count = 0
-            
-            # Continuous loop - no frame limit!
-            while st.session_state.camera_active:
+            # MAIN UNLIMITED LOOP - NO RESTRICTIONS!
+            while st.session_state.camera_running:
+                # Read frame
                 ret, frame = cap.read()
                 if not ret or frame is None:
-                    st.error("❌ Lost connection to camera")
-                    # Try to reconnect
+                    # Try to reconnect camera
                     cap.release()
-                    time.sleep(0.5)
+                    time.sleep(0.1)
                     cap = cv2.VideoCapture(camera_index)
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
                     continue
                 
-                # Flip frame horizontally for mirror effect
-                frame = cv2.flip(frame, 1)
-                
+                # Process frame
                 process_start = time.time()
+                
+                # Flip frame for mirror effect
+                frame = cv2.flip(frame, 1)
                 
                 # Initialize analytics results
                 face_visible = False
                 posture_centered = False
                 looking_at_camera = False
                 
-                # Apply analytics based on settings
+                # Apply analytics
                 if show_face_detection:
                     frame, face_visible = detect_face_opencv(frame)
                 
@@ -264,40 +204,48 @@ def main():
                 if show_gaze_tracking and face_visible:
                     frame, looking_at_camera = analyze_gaze_simple(frame, face_visible)
                 
-                # Add timestamp and frame info
-                timestamp = datetime.now().strftime("%H:%M:%S")
+                # Add session info to frame
                 session_time = time.time() - st.session_state.session_start_time
-                frame_info = f"Time: {timestamp} | Session: {session_time/60:.1f}m | Frame: {frame_count}"
-                cv2.putText(frame, frame_info, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                info_text = f"UNLIMITED MODE | {timestamp} | {session_time/60:.1f}min | Frame: {st.session_state.frame_count}"
+                cv2.putText(frame, info_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                 
-                # Add continuous mode indicator
-                if continuous_mode:
-                    cv2.putText(frame, "CONTINUOUS MODE", (10, frame.shape[0]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                # Add status indicators
+                cv2.putText(frame, "CONTINUOUS RUNNING", (10, frame.shape[0]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 
-                # Display frame
+                # Update display
                 video_placeholder.image(frame, channels="BGR", use_column_width=True)
                 
-                # Update metrics
-                face_status = "✅ Visible" if face_visible else "❌ Not Detected"
-                posture_status = "✅ Centered" if posture_centered else "⚠️ Off-Center"
-                gaze_status = "✅ Looking" if looking_at_camera else "❌ Looking Away"
-                
-                face_metric.metric("👤 Face Detection", face_status)
-                posture_metric.metric("🧍 Posture", posture_status)
-                gaze_metric.metric("👁️ Gaze", gaze_status)
-                
-                # Status summary
-                status_html = f"""
-                <div style="padding: 15px; border-radius: 10px; background-color: #f0f2f6;">
-                    <h4>📊 Live Analysis:</h4>
-                    <p><strong>Face:</strong> <span style="color: {'green' if face_visible else 'red'};">{face_status}</span></p>
-                    <p><strong>Posture:</strong> <span style="color: {'green' if posture_centered else 'orange'};">{posture_status}</span></p>
-                    <p><strong>Gaze:</strong> <span style="color: {'green' if looking_at_camera else 'red'};">{gaze_status}</span></p>
-                    <p><strong>Mode:</strong> {'🔄 Continuous' if continuous_mode else '⏱️ Limited'}</p>
-                    <p><strong>Frames:</strong> {frame_count:,}</p>
-                </div>
-                """
-                status_placeholder.markdown(status_html, unsafe_allow_html=True)
+                # Update metrics every second to avoid too frequent updates
+                current_time = time.time()
+                if current_time - last_update_time >= 1.0:
+                    # Update analytics metrics
+                    face_status = "✅ Visible" if face_visible else "❌ Not Detected"
+                    posture_status = "✅ Centered" if posture_centered else "⚠️ Off-Center"
+                    gaze_status = "✅ Looking" if looking_at_camera else "❌ Looking Away"
+                    
+                    face_metric.metric("👤 Face Detection", face_status)
+                    posture_metric.metric("🧍 Posture", posture_status)
+                    gaze_metric.metric("👁️ Gaze", gaze_status)
+                    
+                    # Status summary
+                    status_html = f"""
+                    <div style="padding: 15px; border-radius: 10px; background-color: #d4edda;">
+                        <h4>🔄 UNLIMITED SESSION ACTIVE</h4>
+                        <p><strong>Face:</strong> <span style="color: {'green' if face_visible else 'red'};">{face_status}</span></p>
+                        <p><strong>Posture:</strong> <span style="color: {'green' if posture_centered else 'orange'};">{posture_status}</span></p>
+                        <p><strong>Gaze:</strong> <span style="color: {'green' if looking_at_camera else 'red'};">{gaze_status}</span></p>
+                        <p><strong>Status:</strong> 🟢 Running Continuously</p>
+                    </div>
+                    """
+                    status_placeholder.markdown(status_html, unsafe_allow_html=True)
+                    
+                    # Performance metrics
+                    session_uptime = current_time - st.session_state.session_start_time
+                    uptime_placeholder.metric("🕐 Session Uptime", f"{session_uptime/60:.1f} min")
+                    frame_count_placeholder.metric("📊 Frames Processed", f"{st.session_state.frame_count:,}")
+                    
+                    last_update_time = current_time
                 
                 # Calculate FPS
                 fps_counter += 1
@@ -312,61 +260,72 @@ def main():
                 latency_ms = process_time * 1000
                 latency_placeholder.metric("⏱️ Processing Time", f"{latency_ms:.1f} ms")
                 
-                # Display uptime
-                session_uptime = time.time() - st.session_state.session_start_time
-                uptime_placeholder.metric("🕐 Session Uptime", f"{session_uptime/60:.1f} min")
-                
                 # Frame rate control
                 time.sleep(max(0, 1/fps_limit - process_time))
                 
-                frame_count += 1
+                # Increment frame counter
+                st.session_state.frame_count += 1
                 
-                # Periodic rerun to keep Streamlit responsive
-                if frame_count % 100 == 0:
-                    time.sleep(0.01)  # Brief pause every 100 frames
+                # Yield control back to Streamlit occasionally
+                if st.session_state.frame_count % 30 == 0:
+                    time.sleep(0.001)  # Tiny pause every 30 frames
             
         except Exception as e:
-            st.error(f"❌ Camera error: {str(e)}")
-            st.error("Click 'Reset Session' to restart")
-            st.session_state.camera_active = False
+            st.error(f"❌ Session error: {str(e)}")
+            st.error("Click 'Start Unlimited Session' to restart")
+            st.session_state.camera_running = False
         
         finally:
             if cap is not None:
                 cap.release()
-            if 'cap_initialized' in st.session_state:
-                del st.session_state.cap_initialized
+            
+            if st.session_state.camera_running:
+                # If we reach here and camera is still supposed to be running,
+                # it means we exited the loop unexpectedly
+                st.warning("⚠️ Session ended unexpectedly. Click 'Start Unlimited Session' to restart.")
+                st.session_state.camera_running = False
     
     else:
         # Default state
-        st.info("👆 Click **'Start Camera'** in the sidebar to begin real-time video analysis")
+        st.info("👆 Click **'Start Unlimited Session'** for truly continuous operation")
         
         # Instructions
         st.markdown("""
-        ### 🎯 Continuous Mode Features:
-        - **No Session Limits** - Runs indefinitely until you stop it
-        - **Automatic Recovery** - Handles camera disconnections
-        - **Performance Monitoring** - Track uptime and frame count
-        - **Manual Controls** - Stop, restart, or reset anytime
+        ### 🎯 Unlimited Mode Features:
+        - **🔄 Truly Continuous** - No automatic stops or session limits
+        - **♾️ Unlimited Frames** - Processes as many frames as needed
+        - **🛡️ Auto-Recovery** - Automatically handles camera disconnections
+        - **📊 Live Monitoring** - Real-time performance and analytics tracking
+        - **🎮 Manual Control** - Only stops when you click 'Stop Session'
         
-        ### 🔧 Camera Setup Tips:
-        - **Continuous Mode**: Checkbox enabled for unlimited runtime
-        - **Performance**: Monitor FPS and processing time
-        - **Session Control**: Use Reset Session if issues occur
-        - **Auto-Recovery**: Camera reconnects if temporarily lost
+        ### 🚀 What's Different:
+        - **No Frame Limits** - Removed all artificial restrictions
+        - **No Time Limits** - Runs for hours/days if needed
+        - **No Auto-Completion** - Only manual stop control
+        - **Optimized Performance** - Efficient processing for long sessions
         
-        ### 📊 Live Analytics:
-        Your app is working perfectly! All features detected correctly:
-        - ✅ **Face Detection** with bounding boxes
-        - ✅ **Posture Analysis** with center zone guides  
-        - ✅ **Gaze Tracking** with attention indicators
-        - ✅ **Real-time Performance** monitoring
+        ### 💡 Performance Tips:
+        - **640x480 resolution** for best performance on long sessions
+        - **15 FPS limit** provides smooth experience without overload
+        - **Monitor metrics** to ensure stable performance
+        - **Use Stop Session** when you're done
         """)
         
         # Show sample metrics
         with col2:
-            face_metric.metric("👤 Face Detection", "Ready", delta="Waiting...")
-            posture_metric.metric("🧍 Posture", "Ready", delta="Waiting...")
-            gaze_metric.metric("👁️ Gaze", "Ready", delta="Waiting...")
+            face_metric.metric("👤 Face Detection", "Ready", delta="Unlimited mode")
+            posture_metric.metric("🧍 Posture", "Ready", delta="Unlimited mode")
+            gaze_metric.metric("👁️ Gaze", "Ready", delta="Unlimited mode")
+            
+            status_html = """
+            <div style="padding: 15px; border-radius: 10px; background-color: #fff3cd;">
+                <h4>⚡ Ready for Unlimited Session</h4>
+                <p>🟡 Standing by for continuous operation</p>
+                <p>♾️ No session limits</p>
+                <p>🎮 Manual control only</p>
+            </div>
+            """
+            status_placeholder.markdown(status_html, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
