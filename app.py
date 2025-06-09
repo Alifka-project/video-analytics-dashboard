@@ -237,8 +237,7 @@ def main():
         # Release camera
         cap.release()
         
-        # Continue streaming
-        time.sleep(0.1)
+        # Continue streaming immediately
         st.rerun()
     
     else:
