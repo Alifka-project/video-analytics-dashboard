@@ -58,29 +58,55 @@ def analyze_gaze_simple(frame, face_detected):
     except:
         return frame, False
 
+def test_camera(camera_index):
+    """Test if camera is available"""
+    cap = cv2.VideoCapture(camera_index)
+    if cap.isOpened():
+        ret, frame = cap.read()
+        cap.release()
+        return ret and frame is not None
+    return False
+
 def main():
     st.title("📹 Video Analytics Dashboard")
     st.markdown("---")
     
-    # Simple state - just ON/OFF
+    # Initialize state
     if 'running' not in st.session_state:
         st.session_state.running = False
+    if 'camera_initialized' not in st.session_state:
+        st.session_state.camera_initialized = False
     
     # Sidebar
     st.sidebar.header("⚙️ Controls")
     
-    camera_index = st.sidebar.selectbox("Camera", [0, 1, 2], index=0)
+    # Camera diagnostics
+    st.sidebar.subheader("📷 Camera Setup")
+    camera_index = st.sidebar.selectbox("Camera Index", [0, 1, 2], index=0)
     
-    # Simple ON/OFF buttons
+    # Test camera button
+    if st.sidebar.button("🔍 Test Camera"):
+        with st.sidebar:
+            with st.spinner("Testing camera..."):
+                if test_camera(camera_index):
+                    st.success(f"✅ Camera {camera_index} works!")
+                else:
+                    st.error(f"❌ Camera {camera_index} not available")
+    
+    # Control buttons
+    st.sidebar.subheader("🎮 Control")
+    
     col_start, col_stop = st.sidebar.columns(2)
     
     with col_start:
-        if st.button("▶️ ON", type="primary"):
+        if st.button("▶️ START", type="primary", use_container_width=True):
             st.session_state.running = True
+            st.session_state.camera_initialized = False
     
     with col_stop:
-        if st.button("⏹️ OFF"):
+        if st.button("⏹️ STOP", use_container_width=True):
             st.session_state.running = False
+            st.session_state.camera_initialized = False
     
     # Analytics options
     st.sidebar.subheader("📊 Features")
@@ -88,11 +114,24 @@ def main():
     posture_on = st.sidebar.checkbox("Posture Analysis", True)
     gaze_on = st.sidebar.checkbox("Gaze Tracking", True)
     
-    # Show current status
+    # Status display
     if st.session_state.running:
         st.sidebar.success("🟢 RUNNING")
     else:
         st.sidebar.info("🔴 STOPPED")
+    
+    # Troubleshooting
+    with st.sidebar.expander("🛠️ Troubleshooting"):
+        st.markdown("""
+        **Camera not working?**
+        1. Close other camera apps (Zoom, Teams, etc.)
+        2. Try different camera index (0, 1, 2)
+        3. Grant camera permissions in browser
+        4. Restart browser if needed
+        
+        **On Mac:** Try Camera Index 1
+        **On Windows:** Try opening Camera app first
+        """)
     
     # Main layout
     col1, col2 = st.columns([2, 1])
@@ -112,10 +151,31 @@ def main():
         st.subheader("📋 Status")
         status_display = st.empty()
     
-    # Main camera logic - NO sessions, NO completion!
+    # Main camera logic
     if st.session_state.running:
-        # Capture one frame
+        # Initialize camera if not done
+        if not st.session_state.camera_initialized:
+            with st.spinner("Initializing camera..."):
+                # Test camera first
+                if not test_camera(camera_index):
+                    st.error(f"❌ Cannot access camera {camera_index}")
+                    st.error("**Try these solutions:**")
+                    st.error("• Close other apps using camera")
+                    st.error("• Try different camera index")
+                    st.error("• Check browser permissions")
+                    st.session_state.running = False
+                    return
+                
+                st.session_state.camera_initialized = True
+                st.success("✅ Camera initialized!")
+        
+        # Capture frame
         cap = cv2.VideoCapture(camera_index)
+        
+        # Set camera properties for better performance
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        cap.set(cv2.CAP_PROP_FPS, 30)
         
         if cap.isOpened():
             ret, frame = cap.read()
@@ -138,41 +198,58 @@ def main():
                 if gaze_on and face_detected:
                     frame, looking_at_camera = analyze_gaze_simple(frame, face_detected)
                 
-                # Add timestamp
+                # Add timestamp and status
                 timestamp = datetime.now().strftime("%H:%M:%S")
-                cv2.putText(frame, timestamp, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                cv2.putText(frame, f"LIVE | {timestamp}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                cv2.putText(frame, "STREAMING", (10, frame.shape[0]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 
-                # Display everything
+                # Display frame
                 video_area.image(frame, channels="BGR", use_column_width=True)
                 
-                # Update metrics
-                face_display.metric("👤 Face", "✅ Detected" if face_detected else "❌ Not Found")
-                posture_display.metric("🧍 Posture", "✅ Centered" if posture_centered else "⚠️ Off-Center")
-                gaze_display.metric("👁️ Gaze", "✅ Looking" if looking_at_camera else "❌ Away")
+                # Update analytics
+                face_status = "✅ Visible" if face_detected else "❌ Not Found"
+                posture_status = "✅ Centered" if posture_centered else "⚠️ Off-Center"
+                gaze_status = "✅ Looking" if looking_at_camera else "❌ Away"
                 
-                # Status
-                status_display.success("🟢 Camera Active - All systems working!")
+                face_display.metric("👤 Face", face_status)
+                posture_display.metric("🧍 Posture", posture_status)
+                gaze_display.metric("👁️ Gaze", gaze_status)
+                
+                # Status summary
+                status_html = f"""
+                <div style="padding: 15px; border-radius: 10px; background-color: #d4edda;">
+                    <h4>🟢 LIVE STREAMING</h4>
+                    <p><strong>Face:</strong> {face_status}</p>
+                    <p><strong>Posture:</strong> {posture_status}</p>
+                    <p><strong>Gaze:</strong> {gaze_status}</p>
+                    <p><strong>Camera:</strong> Working properly</p>
+                </div>
+                """
+                status_display.markdown(status_html, unsafe_allow_html=True)
+                
             else:
-                video_area.error("❌ Cannot read from camera")
+                video_area.error("❌ Cannot read from camera - try different camera index")
+                st.session_state.running = False
         else:
-            video_area.error("❌ Cannot open camera")
+            video_area.error("❌ Cannot open camera - check if it's being used by another app")
+            st.session_state.running = False
         
-        # Close camera immediately
+        # Release camera
         cap.release()
         
-        # Keep running - auto refresh
-        time.sleep(0.2)
+        # Continue streaming
+        time.sleep(0.1)
         st.rerun()
     
     else:
         # Stopped state
-        video_area.info("📷 Camera is OFF. Click ▶️ ON to start.")
+        video_area.info("📷 Camera is OFF. Click ▶️ START to begin streaming.")
         
-        face_display.metric("👤 Face", "⏸️ Paused")
-        posture_display.metric("🧍 Posture", "⏸️ Paused")
-        gaze_display.metric("👁️ Gaze", "⏸️ Paused")
+        face_display.metric("👤 Face", "⏸️ Ready")
+        posture_display.metric("🧍 Posture", "⏸️ Ready")
+        gaze_display.metric("👁️ Gaze", "⏸️ Ready")
         
-        status_display.info("🔴 Camera stopped. Ready to start.")
+        status_display.info("🔴 Stopped. Ready to start streaming.")
 
 if __name__ == "__main__":
     main()
