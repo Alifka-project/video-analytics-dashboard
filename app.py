@@ -6,14 +6,13 @@ from datetime import datetime
 
 # Configure Streamlit page
 st.set_page_config(
-    page_title="Simple Video Analytics",
+    page_title="Video Analytics",
     page_icon="📹",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
 def detect_face_opencv(frame):
-    """Detect faces using OpenCV's built-in cascade classifier"""
+    """Detect faces using OpenCV"""
     try:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
@@ -24,11 +23,11 @@ def detect_face_opencv(frame):
             cv2.putText(frame, 'Face Detected', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
         
         return frame, len(faces) > 0
-    except Exception as e:
+    except:
         return frame, False
 
 def analyze_posture_simple(frame):
-    """Simple posture analysis based on frame composition"""
+    """Simple posture analysis"""
     try:
         height, width = frame.shape[:2]
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -40,7 +39,7 @@ def analyze_posture_simple(frame):
         cv2.putText(frame, 'Center Zone', (width//3, height//3-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         
         return frame, is_centered
-    except Exception as e:
+    except:
         return frame, False
 
 def analyze_gaze_simple(frame, face_detected):
@@ -54,158 +53,126 @@ def analyze_gaze_simple(frame, face_detected):
         
         if looking_at_camera:
             cv2.putText(frame, 'Looking at Camera', (10, height-20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        else:
-            cv2.putText(frame, 'Not Looking', (10, height-20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
         
         return frame, looking_at_camera
-    except Exception as e:
+    except:
         return frame, False
 
 def main():
-    st.title("📹 Simple Video Analytics - Just Start/Stop")
+    st.title("📹 Video Analytics Dashboard")
     st.markdown("---")
     
-    # Initialize simple state
-    if 'camera_on' not in st.session_state:
-        st.session_state.camera_on = False
+    # Simple state - just ON/OFF
+    if 'running' not in st.session_state:
+        st.session_state.running = False
     
-    # Sidebar configuration
-    st.sidebar.header("⚙️ Settings")
+    # Sidebar
+    st.sidebar.header("⚙️ Controls")
     
-    # Camera settings
-    camera_index = st.sidebar.selectbox("Camera Index", [0, 1, 2], index=0)
+    camera_index = st.sidebar.selectbox("Camera", [0, 1, 2], index=0)
     
-    # Analytics settings
-    st.sidebar.subheader("📊 Analytics")
-    show_face_detection = st.sidebar.checkbox("Face Detection", value=True)
-    show_posture_analysis = st.sidebar.checkbox("Posture Analysis", value=True)
-    show_gaze_tracking = st.sidebar.checkbox("Gaze Tracking", value=True)
+    # Simple ON/OFF buttons
+    col_start, col_stop = st.sidebar.columns(2)
     
-    # Simple start/stop buttons
-    st.sidebar.subheader("🎮 Camera Control")
+    with col_start:
+        if st.button("▶️ ON", type="primary"):
+            st.session_state.running = True
     
-    if st.sidebar.button("🚀 Start Camera", type="primary"):
-        st.session_state.camera_on = True
+    with col_stop:
+        if st.button("⏹️ OFF"):
+            st.session_state.running = False
     
-    if st.sidebar.button("⏹️ Stop Camera"):
-        st.session_state.camera_on = False
+    # Analytics options
+    st.sidebar.subheader("📊 Features")
+    face_on = st.sidebar.checkbox("Face Detection", True)
+    posture_on = st.sidebar.checkbox("Posture Analysis", True)
+    gaze_on = st.sidebar.checkbox("Gaze Tracking", True)
     
-    # Status display
-    if st.session_state.camera_on:
-        st.sidebar.success("🟢 Camera: ON")
+    # Show current status
+    if st.session_state.running:
+        st.sidebar.success("🟢 RUNNING")
     else:
-        st.sidebar.info("🔴 Camera: OFF")
+        st.sidebar.info("🔴 STOPPED")
     
     # Main layout
     col1, col2 = st.columns([2, 1])
     
+    # Video area
     with col1:
-        st.subheader("📹 Live Video Feed")
-        video_placeholder = st.empty()
+        st.subheader("📹 Camera Feed")
+        video_area = st.empty()
     
+    # Analytics area
     with col2:
         st.subheader("📊 Analytics")
+        face_display = st.empty()
+        posture_display = st.empty()
+        gaze_display = st.empty()
         
-        # Metrics placeholders
-        face_metric = st.empty()
-        posture_metric = st.empty()
-        gaze_metric = st.empty()
-        
-        # Status indicators
-        st.subheader("🚦 Status")
-        status_placeholder = st.empty()
+        st.subheader("📋 Status")
+        status_display = st.empty()
     
-    # Simple camera processing - NO session management!
-    if st.session_state.camera_on:
-        try:
-            # Open camera for single frame
-            cap = cv2.VideoCapture(camera_index)
+    # Main camera logic - NO sessions, NO completion!
+    if st.session_state.running:
+        # Capture one frame
+        cap = cv2.VideoCapture(camera_index)
+        
+        if cap.isOpened():
+            ret, frame = cap.read()
             
-            if cap.isOpened():
-                ret, frame = cap.read()
+            if ret and frame is not None:
+                # Mirror effect
+                frame = cv2.flip(frame, 1)
                 
-                if ret and frame is not None:
-                    # Flip frame for mirror effect
-                    frame = cv2.flip(frame, 1)
-                    
-                    # Initialize analytics results
-                    face_visible = False
-                    posture_centered = False
-                    looking_at_camera = False
-                    
-                    # Apply analytics
-                    if show_face_detection:
-                        frame, face_visible = detect_face_opencv(frame)
-                    
-                    if show_posture_analysis:
-                        frame, posture_centered = analyze_posture_simple(frame)
-                    
-                    if show_gaze_tracking and face_visible:
-                        frame, looking_at_camera = analyze_gaze_simple(frame, face_visible)
-                    
-                    # Add simple timestamp
-                    timestamp = datetime.now().strftime("%H:%M:%S")
-                    cv2.putText(frame, f"Time: {timestamp}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                    
-                    # Display frame
-                    video_placeholder.image(frame, channels="BGR", use_column_width=True)
-                    
-                    # Update metrics
-                    face_status = "Visible" if face_visible else "Not Detected"
-                    posture_status = "Centered" if posture_centered else "Off-Center"
-                    gaze_status = "Looking" if looking_at_camera else "Looking Away"
-                    
-                    face_metric.metric("👤 Face", face_status)
-                    posture_metric.metric("🧍 Posture", posture_status)
-                    gaze_metric.metric("👁️ Gaze", gaze_status)
-                    
-                    # Simple status
-                    status_html = f"""
-                    <div style="padding: 15px; border-radius: 10px; background-color: #d4edda;">
-                        <h4>📊 Current Status</h4>
-                        <p><strong>Face:</strong> {face_status}</p>
-                        <p><strong>Posture:</strong> {posture_status}</p>
-                        <p><strong>Gaze:</strong> {gaze_status}</p>
-                        <p><strong>Camera:</strong> 🟢 Active</p>
-                    </div>
-                    """
-                    status_placeholder.markdown(status_html, unsafe_allow_html=True)
-                    
-                else:
-                    video_placeholder.error("❌ Cannot read from camera")
-                    st.session_state.camera_on = False
+                # Analytics
+                face_detected = False
+                posture_centered = False
+                looking_at_camera = False
+                
+                if face_on:
+                    frame, face_detected = detect_face_opencv(frame)
+                
+                if posture_on:
+                    frame, posture_centered = analyze_posture_simple(frame)
+                
+                if gaze_on and face_detected:
+                    frame, looking_at_camera = analyze_gaze_simple(frame, face_detected)
+                
+                # Add timestamp
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                cv2.putText(frame, timestamp, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                
+                # Display everything
+                video_area.image(frame, channels="BGR", use_column_width=True)
+                
+                # Update metrics
+                face_display.metric("👤 Face", "✅ Detected" if face_detected else "❌ Not Found")
+                posture_display.metric("🧍 Posture", "✅ Centered" if posture_centered else "⚠️ Off-Center")
+                gaze_display.metric("👁️ Gaze", "✅ Looking" if looking_at_camera else "❌ Away")
+                
+                # Status
+                status_display.success("🟢 Camera Active - All systems working!")
             else:
-                video_placeholder.error("❌ Cannot open camera")
-                st.session_state.camera_on = False
-            
-            # Always close camera immediately
-            cap.release()
-            
-            # Auto-refresh only when camera is on
-            time.sleep(0.1)  # Small delay
-            st.rerun()
-            
-        except Exception as e:
-            st.error(f"Camera error: {str(e)}")
-            st.session_state.camera_on = False
+                video_area.error("❌ Cannot read from camera")
+        else:
+            video_area.error("❌ Cannot open camera")
+        
+        # Close camera immediately
+        cap.release()
+        
+        # Keep running - auto refresh
+        time.sleep(0.2)
+        st.rerun()
     
     else:
-        # Camera is off - show default state
-        video_placeholder.info("📷 Camera is OFF - Click 'Start Camera' to begin")
+        # Stopped state
+        video_area.info("📷 Camera is OFF. Click ▶️ ON to start.")
         
-        # Show ready state
-        face_metric.metric("👤 Face", "Ready")
-        posture_metric.metric("🧍 Posture", "Ready")
-        gaze_metric.metric("👁️ Gaze", "Ready")
+        face_display.metric("👤 Face", "⏸️ Paused")
+        posture_display.metric("🧍 Posture", "⏸️ Paused")
+        gaze_display.metric("👁️ Gaze", "⏸️ Paused")
         
-        status_html = """
-        <div style="padding: 15px; border-radius: 10px; background-color: #f8f9fa;">
-            <h4>📊 System Ready</h4>
-            <p><strong>Camera:</strong> 🔴 OFF</p>
-            <p><strong>Status:</strong> Waiting to start</p>
-        </div>
-        """
-        status_placeholder.markdown(status_html, unsafe_allow_html=True)
+        status_display.info("🔴 Camera stopped. Ready to start.")
 
 if __name__ == "__main__":
     main()
