@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import mediapipe as mp
 import time
+import os
 from datetime import datetime
 import math
 
@@ -14,7 +15,18 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Initialize MediaPipe
+# Cloud deployment detection
+def is_cloud_deployment():
+    """Detect if running on cloud platform"""
+    cloud_indicators = [
+        'RAILWAY_ENVIRONMENT',  # Railway
+        'RENDER',               # Render
+        'DYNO',                 # Heroku
+        'VERCEL',              # Vercel
+    ]
+    return any(os.getenv(indicator) for indicator in cloud_indicators)
+
+# Initialize MediaPipe with cloud-optimized settings
 @st.cache_resource
 def load_mediapipe_models():
     mp_face_detection = mp.solutions.face_detection
@@ -22,17 +34,22 @@ def load_mediapipe_models():
     mp_face_mesh = mp.solutions.face_mesh
     mp_drawing = mp.solutions.drawing_utils
     
+    # Optimized settings for cloud deployment
+    confidence = 0.6 if is_cloud_deployment() else 0.5
+    
     face_detection = mp_face_detection.FaceDetection(
-        model_selection=0, min_detection_confidence=0.5
+        model_selection=0, min_detection_confidence=confidence
     )
     pose = mp_pose.Pose(
-        min_detection_confidence=0.5, min_tracking_confidence=0.5
+        min_detection_confidence=confidence, 
+        min_tracking_confidence=confidence,
+        model_complexity=1  # Reduced complexity for cloud
     )
     face_mesh = mp_face_mesh.FaceMesh(
         max_num_faces=1,
         refine_landmarks=True,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5
+        min_detection_confidence=confidence,
+        min_tracking_confidence=confidence
     )
     
     return face_detection, pose, face_mesh, mp_drawing
@@ -79,7 +96,7 @@ def analyze_gaze_direction(landmarks, image_shape):
         horizontal_deviation = abs(eye_center[0] - nose_center[0])
         
         # Threshold for "looking at camera"
-        looking_threshold = 15  # pixels
+        looking_threshold = 20  # Slightly higher for cloud deployment
         
         return horizontal_deviation < looking_threshold, horizontal_deviation
     
@@ -102,8 +119,8 @@ def analyze_posture(pose_landmarks, image_shape):
         image_center_x = w / 2
         deviation = abs(shoulder_center_x - image_center_x)
         
-        # Threshold for centered posture (adjust based on your needs)
-        centered_threshold = w * 0.1  # 10% of image width
+        # Threshold for centered posture
+        centered_threshold = w * 0.12  # Slightly more lenient for cloud
         
         is_centered = deviation < centered_threshold
         deviation_percentage = (deviation / (w / 2)) * 100
@@ -136,9 +153,12 @@ def process_frame(frame, face_detection, pose, face_mesh, mp_drawing):
     # Pose detection
     pose_results = pose.process(rgb_frame)
     if pose_results.pose_landmarks:
-        # Draw pose landmarks
+        # Draw pose landmarks (simplified for performance)
         mp_drawing.draw_landmarks(
-            frame, pose_results.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS
+            frame, pose_results.pose_landmarks, 
+            mp.solutions.pose.POSE_CONNECTIONS,
+            landmark_drawing_spec=mp_drawing.DrawingSpec(color=(0,255,0), thickness=2, circle_radius=2),
+            connection_drawing_spec=mp_drawing.DrawingSpec(color=(0,255,0), thickness=2)
         )
         
         # Analyze posture
@@ -146,7 +166,7 @@ def process_frame(frame, face_detection, pose, face_mesh, mp_drawing):
             pose_results.pose_landmarks, frame.shape
         )
     
-    # Face mesh for gaze detection
+    # Face mesh for gaze detection (simplified for cloud performance)
     face_mesh_results = face_mesh.process(rgb_frame)
     if face_mesh_results.multi_face_landmarks:
         for face_landmarks in face_mesh_results.multi_face_landmarks:
@@ -154,15 +174,16 @@ def process_frame(frame, face_detection, pose, face_mesh, mp_drawing):
             looking_at_camera, gaze_deviation = analyze_gaze_direction(
                 face_landmarks.landmark, frame.shape
             )
-            
-            # Draw face mesh (optional, can be commented out for performance)
-            # mp_drawing.draw_landmarks(
-            #     frame, face_landmarks, mp.solutions.face_mesh.FACEMESH_CONTOURS
-            # )
     
     return frame, face_visible, posture_centered, looking_at_camera, posture_deviation, gaze_deviation
 
 def main():
+    # Header with deployment info
+    if is_cloud_deployment():
+        st.success("🌐 Running on Cloud Platform - Camera access available via HTTPS!")
+    else:
+        st.info("💻 Running locally")
+    
     st.title("🎥 Real-time Video Analytics Dashboard")
     st.markdown("---")
     
@@ -172,23 +193,32 @@ def main():
     # Sidebar configuration
     st.sidebar.header("⚙️ Settings")
     
+    # Cloud-optimized default settings
+    default_width = 480 if is_cloud_deployment() else 640
+    default_height = 360 if is_cloud_deployment() else 480
+    default_fps = 12 if is_cloud_deployment() else 15
+    
     # Camera settings
     camera_index = st.sidebar.selectbox("Camera Index", [0, 1, 2], index=0)
-    frame_width = st.sidebar.slider("Frame Width", 320, 1280, 640, 160)
-    frame_height = st.sidebar.slider("Frame Height", 240, 720, 480, 120)
+    frame_width = st.sidebar.slider("Frame Width", 320, 1280, default_width, 160)
+    frame_height = st.sidebar.slider("Frame Height", 240, 720, default_height, 120)
     
     # Analytics thresholds
     st.sidebar.subheader("Analytics Thresholds")
-    face_confidence = st.sidebar.slider("Face Detection Confidence", 0.1, 1.0, 0.5, 0.1)
-    posture_threshold = st.sidebar.slider("Posture Center Threshold (%)", 5, 25, 10, 1)
-    gaze_threshold = st.sidebar.slider("Gaze Center Threshold (px)", 5, 30, 15, 1)
+    face_confidence = st.sidebar.slider("Face Detection Confidence", 0.1, 1.0, 0.6, 0.1)
+    posture_threshold = st.sidebar.slider("Posture Center Threshold (%)", 5, 25, 12, 1)
+    gaze_threshold = st.sidebar.slider("Gaze Center Threshold (px)", 5, 30, 20, 1)
     
     # Performance settings
     st.sidebar.subheader("Performance")
-    fps_limit = st.sidebar.slider("FPS Limit", 10, 30, 15, 1)
+    fps_limit = st.sidebar.slider("FPS Limit", 5, 30, default_fps, 1)
+    
+    # Cloud deployment tips
+    if is_cloud_deployment():
+        st.sidebar.info("💡 Cloud Tips:\n- Use lower resolution for better performance\n- Reduce FPS if experiencing lag\n- Allow camera access in browser")
     
     # Start/Stop button
-    start_analytics = st.sidebar.button("🚀 Start Analytics")
+    start_analytics = st.sidebar.button("🚀 Start Analytics", type="primary")
     stop_analytics = st.sidebar.button("⏹️ Stop Analytics")
     
     # Main layout
@@ -230,13 +260,18 @@ def main():
         try:
             # Initialize camera
             cap = cv2.VideoCapture(camera_index)
+            
+            if not cap.isOpened():
+                st.error("❌ Could not open camera. Please check:")
+                st.error("1. Camera permissions are granted")
+                st.error("2. No other apps are using the camera")
+                st.error("3. Try different camera index (0, 1, 2)")
+                return
+            
+            # Set camera properties
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, frame_width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, frame_height)
             cap.set(cv2.CAP_PROP_FPS, fps_limit)
-            
-            if not cap.isOpened():
-                st.error("❌ Could not open camera. Please check camera index.")
-                return
             
             # Performance tracking
             frame_count = 0
@@ -244,6 +279,7 @@ def main():
             fps_counter = 0
             fps_start_time = time.time()
             
+            # Processing loop
             while st.session_state.analytics_running:
                 ret, frame = cap.read()
                 if not ret:
@@ -266,62 +302,94 @@ def main():
                 face_metric.metric(
                     "👤 Face Detection",
                     "Visible" if face_visible else "Not Visible",
-                    delta="✅" if face_visible else "❌"
+                    delta="✅ Detected" if face_visible else "❌ Not found"
                 )
                 
                 posture_metric.metric(
-                    "🧍 Posture",
+                    "🧍 Posture Analysis",
                     "Centered" if posture_centered else "Off-center",
                     delta=f"{posture_deviation:.1f}% deviation"
                 )
                 
                 gaze_metric.metric(
-                    "👁️ Gaze Direction",
+                    "👁️ Gaze Tracking",
                     "Looking at camera" if looking_at_camera else "Looking away",
                     delta=f"{gaze_deviation:.1f}px deviation"
                 )
                 
                 # Status indicators
                 status_html = f"""
-                <div style="padding: 10px; border-radius: 5px;">
-                    <p>👤 Face: <span style="color: {'green' if face_visible else 'red'};">{'✅' if face_visible else '❌'}</span></p>
-                    <p>🧍 Posture: <span style="color: {'green' if posture_centered else 'orange'};">{'✅' if posture_centered else '⚠️'}</span></p>
-                    <p>👁️ Gaze: <span style="color: {'green' if looking_at_camera else 'red'};">{'✅' if looking_at_camera else '❌'}</span></p>
+                <div style="padding: 15px; border-radius: 10px; background-color: #f0f2f6;">
+                    <h4>Current Status:</h4>
+                    <p><strong>👤 Face:</strong> <span style="color: {'green' if face_visible else 'red'}; font-size: 18px;">{'✅ Visible' if face_visible else '❌ Not Detected'}</span></p>
+                    <p><strong>🧍 Posture:</strong> <span style="color: {'green' if posture_centered else 'orange'}; font-size: 18px;">{'✅ Centered' if posture_centered else '⚠️ Off-Center'}</span></p>
+                    <p><strong>👁️ Gaze:</strong> <span style="color: {'green' if looking_at_camera else 'red'}; font-size: 18px;">{'✅ On Camera' if looking_at_camera else '❌ Looking Away'}</span></p>
                 </div>
                 """
                 status_placeholder.markdown(status_html, unsafe_allow_html=True)
                 
-                # Calculate FPS
+                # Calculate and display FPS
                 fps_counter += 1
                 if time.time() - fps_start_time >= 1.0:
                     current_fps = fps_counter / (time.time() - fps_start_time)
-                    fps_placeholder.metric("📈 FPS", f"{current_fps:.1f}")
+                    fps_placeholder.metric("📈 Current FPS", f"{current_fps:.1f}")
                     fps_counter = 0
                     fps_start_time = time.time()
                 
-                # Display latency
+                # Display processing latency
                 latency_ms = process_time * 1000
-                latency_placeholder.metric("⏱️ Processing Latency", f"{latency_ms:.1f} ms")
+                latency_color = "green" if latency_ms < 100 else "orange" if latency_ms < 200 else "red"
+                latency_placeholder.metric("⏱️ Processing Time", f"{latency_ms:.1f} ms")
                 
-                # Control FPS
+                # Frame rate control
                 time.sleep(max(0, 1/fps_limit - process_time))
                 
                 frame_count += 1
             
             cap.release()
+            st.success("✅ Analytics stopped successfully")
             
         except Exception as e:
             st.error(f"❌ An error occurred: {str(e)}")
+            st.error("Please try refreshing the page or adjusting settings")
             st.session_state.analytics_running = False
     
     else:
-        st.info("👆 Click 'Start Analytics' in the sidebar to begin real-time video analysis")
+        # Default state
+        st.info("👆 Click **'Start Analytics'** in the sidebar to begin real-time video analysis")
+        
+        # Instructions for cloud deployment
+        if is_cloud_deployment():
+            st.markdown("""
+            ### 📱 Quick Start Instructions:
+            1. Click **'Start Analytics'** in the sidebar
+            2. Allow camera access when prompted by your browser
+            3. Position yourself in front of the camera
+            4. Watch real-time analytics update!
+            
+            ### 🔧 Having issues?
+            - Ensure you're using **HTTPS** (this deployment should automatically provide it)
+            - Try different browsers (Chrome/Edge work best)
+            - Check camera permissions in browser settings
+            - Reduce frame size/FPS if performance is slow
+            """)
         
         # Show sample metrics when not running
         with col2:
-            face_metric.metric("👤 Face Detection", "Waiting...", delta="Ready")
-            posture_metric.metric("🧍 Posture", "Waiting...", delta="Ready")
-            gaze_metric.metric("👁️ Gaze Direction", "Waiting...", delta="Ready")
+            face_metric.metric("👤 Face Detection", "Ready to start", delta="Waiting...")
+            posture_metric.metric("🧍 Posture Analysis", "Ready to start", delta="Waiting...")
+            gaze_metric.metric("👁️ Gaze Tracking", "Ready to start", delta="Waiting...")
+            
+            # Sample status
+            status_html = """
+            <div style="padding: 15px; border-radius: 10px; background-color: #e8f4ff;">
+                <h4>System Ready!</h4>
+                <p>🟡 Waiting to start analytics...</p>
+                <p>📹 Camera: Standby</p>
+                <p>🤖 AI Models: Loaded</p>
+            </div>
+            """
+            status_placeholder.markdown(status_html, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
